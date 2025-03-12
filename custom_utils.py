@@ -25,7 +25,7 @@ def get_real_region(row):
     return region_map.get(row["RegionEnc"], "Unknown")
 
 def transform_data(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.drop(["DayNum", "WScore", "LScore", "NumOT", "WLoc"], axis=1)
+    df = df.drop(["WScore", "LScore", "NumOT", "WLoc"], axis=1)
     df["Result"] = 1
     inv_df = df.copy()
     inv_df[["WTeamID", "LTeamID"]] = inv_df[["LTeamID", "WTeamID"]]
@@ -40,9 +40,33 @@ def make_preds_for_submission(clf, filepath_sub: str, gender: str) -> pd.DataFra
     df['isTourney'] = 1
     if gender == "W":
         df = df.loc[df.WTeamID < 3000]
-    else:
+    elif gender == "M" :
         df = df.loc[df.WTeamID > 3000]
+    else:
+        raise ValueError("You have to specify gender! Your options: W - women, M - men")
     X_features = df.iloc[:, 2:]
     pred_probs = np.max(clf.predict_proba(X_features), axis=1)
     df["Pred"] = np.round(pred_probs, 4)
     return df[["ID", "Pred"]]
+
+
+def enrich_data(df: pd.DataFrame, gender: str):
+    
+    if gender == "W":
+        seeds = pd.read_csv("data/WNCAATourneySeeds.csv")
+    elif gender == "M":
+        seeds = pd.read_csv("data/MNCAATourneySeeds.csv")
+    else:
+        raise ValueError("You have to specify gender! Your options: W - women, M - men")
+    
+    seeds["ISeed"] = seeds.apply(transform_seeds, axis=1)
+    seeds["ISeed"] = seeds.apply(transform_seeds, axis=1)
+
+    prep_enh = pd.merge(df, seeds, how="left", left_on=["Season", "WTeamID"], right_on=["Season", "TeamID"]).drop(["TeamID", "Seed"], axis=1).fillna(16.)
+    prep_enh["ISeed"] = prep_enh["ISeed"].astype("int")
+    prep_enh = prep_enh.rename(columns={"ISeed" : "SeedW"})
+    prep_enh = pd.merge(prep_enh, seeds, how="left", left_on=["Season", "LTeamID"], right_on=["Season", "TeamID"]).drop(["TeamID", "Seed"], axis=1).fillna(16.)
+    prep_enh["ISeed"] = prep_enh["ISeed"].astype("int")
+    prep_enh = prep_enh.rename(columns={"ISeed" : "SeedL"})
+    prep_enh["SeedDiff"] = prep_enh["SeedW"] - prep_enh["SeedL"]
+    return prep_enh
