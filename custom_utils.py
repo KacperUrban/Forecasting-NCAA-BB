@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.feature_selection import mutual_info_classif
+from sklearn.preprocessing import LabelEncoder
 
 
 def transform_seeds(row):
@@ -64,6 +65,8 @@ def enrich_data(df: pd.DataFrame, gender: str):
         seeds = pd.read_csv("data/WNCAATourneySeeds.csv")
     elif gender == "M":
         seeds = pd.read_csv("data/MNCAATourneySeeds.csv")
+        mteams = pd.read_csv("data/MTeams.csv")
+        mcoaches = pd.read_csv("data/MTeamCoaches.csv")
     else:
         raise ValueError("You have to specify gender! Your options: W - women, M - men")
 
@@ -72,8 +75,10 @@ def enrich_data(df: pd.DataFrame, gender: str):
     seeds_prev = seeds.copy()
     seeds_prev["Season"] += 1
 
+    # information whether is tournament phase
     df["is_tournament"] = df["DayNum"] >= 136
 
+    # add seed values based on tournament values
     regular_season = (
         df[~df["is_tournament"]]
         .merge(
@@ -113,6 +118,64 @@ def enrich_data(df: pd.DataFrame, gender: str):
 
     prep_enh = pd.concat([regular_season, tournament])
 
+    # added coaches names, encode it and calculate how long team is in Division I
+    if gender == "M":
+        prep_enh = prep_enh.merge(
+            mcoaches,
+            how="left",
+            left_on=["Season", "WTeamID"],
+            right_on=["Season", "TeamID"],
+        )
+        prep_enh = (
+            prep_enh.loc[
+                (prep_enh.DayNum >= prep_enh.FirstDayNum)
+                & (prep_enh.DayNum <= prep_enh.LastDayNum)
+            ]
+            .drop(["TeamID", "FirstDayNum", "LastDayNum"], axis=1)
+            .rename(columns={"CoachName": "WCoachName"})
+        )
+
+        prep_enh = prep_enh.merge(
+            mcoaches,
+            how="left",
+            left_on=["Season", "LTeamID"],
+            right_on=["Season", "TeamID"],
+        )
+        prep_enh = (
+            prep_enh.loc[
+                (prep_enh.DayNum >= prep_enh.FirstDayNum)
+                & (prep_enh.DayNum <= prep_enh.LastDayNum)
+            ]
+            .drop(["TeamID", "FirstDayNum", "LastDayNum"], axis=1)
+            .rename(columns={"CoachName": "LCoachName"})
+        )
+
+        label_enc = LabelEncoder()
+        prep_enh["WCoachName"] = label_enc.fit_transform(prep_enh[["WCoachName"]])
+        prep_enh["LCoachName"] = label_enc.transform(prep_enh[["LCoachName"]])
+
+        prep_enh = (
+            prep_enh.merge(mteams, how="left", left_on="WTeamID", right_on="TeamID")
+            .drop(["TeamID", "TeamName"], axis=1)
+            .rename(columns={"Duration": "WDuration"})
+        )
+        prep_enh.loc[
+            prep_enh["Season"] - prep_enh["FirstD1Season"]
+            < prep_enh["LastD1Season"] - prep_enh["FirstD1Season"],
+            "Duration",
+        ] = (
+            prep_enh["Season"] - prep_enh["FirstD1Season"] + 1
+        )
+        prep_enh.loc[
+            prep_enh["Season"] - prep_enh["FirstD1Season"]
+            >= prep_enh["LastD1Season"] - prep_enh["FirstD1Season"],
+            "Duration",
+        ] = (
+            prep_enh["LastD1Season"] - prep_enh["FirstD1Season"] + 1
+        )
+        prep_enh = prep_enh.drop(["FirstD1Season", "LastD1Season"], axis=1)
+
+    # change dtypes and calucalte difference between seeds
     prep_enh["SeedW"] = prep_enh["SeedW"].fillna(16).astype(int)
     prep_enh["SeedL"] = prep_enh["SeedL"].fillna(16).astype(int)
     prep_enh["is_tournament"] = prep_enh["is_tournament"].astype(int)
@@ -122,7 +185,7 @@ def enrich_data(df: pd.DataFrame, gender: str):
     return prep_enh
 
 
-def highlight_top_n(s, n=3, color="green"):
+def highlight_top_n(s, n=5, color="green"):
     top_n = s.nlargest(n).values
     return [f"background-color: {color}" if v in top_n else "" for v in s]
 
@@ -132,6 +195,8 @@ def feature_importance(clf, data: pd.DataFrame) -> pd.DataFrame:
     feature = clf.feature_names_in_
 
     importance_mi = mutual_info_classif(data.drop("Result", axis=1), data["Result"])
+
+    print(importance_mi)
 
     importance_df = pd.DataFrame(
         {
