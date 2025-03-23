@@ -1,4 +1,4 @@
-import pandas as pd
+import fireducks.pandas as pd
 import numpy as np
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import LabelEncoder
@@ -15,7 +15,6 @@ def transform_loc(row):
         return "A"
     else:
         return "N"
-
 
 def get_enc_region(row):
     return row["Seed"][:1]
@@ -195,8 +194,6 @@ def feature_importance(clf, data: pd.DataFrame) -> pd.DataFrame:
     feature = clf.feature_names_in_
 
     importance_mi = mutual_info_classif(data.drop("Result", axis=1), data["Result"])
-
-    print(importance_mi)
 
     importance_df = pd.DataFrame(
         {
