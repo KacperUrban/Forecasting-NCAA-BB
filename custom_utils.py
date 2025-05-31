@@ -37,7 +37,7 @@ def transform_data(df: pd.DataFrame) -> pd.DataFrame:
     inv_df[["WTeamID", "LTeamID"]] = inv_df[["LTeamID", "WTeamID"]]
     inv_df["Result"] = 0
 
-    merged_df = pd.concat([df, inv_df], axis=0).reset_index(drop=True)
+    merged_df = pd.concat([df, inv_df], axis=0).sort_values(["Season", "DayNum"]).reset_index(drop=True)
     return merged_df
 
 
