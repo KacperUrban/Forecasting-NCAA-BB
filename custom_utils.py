@@ -58,43 +58,28 @@ def make_preds_for_submission(clf, filepath_sub: str, gender: str) -> pd.DataFra
     df["Pred"] = np.round(pred_probs, 4)
     return df[["ID", "Pred"]]
 
+def add_number_of_wins(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
+    """This function is helper function for data enhencement. It will add number of wins in current season for two teams. L and W Team.
 
-def enrich_data(df: pd.DataFrame, gender: str):
-    if gender == "W":
-        seeds = pd.read_csv("data/WNCAATourneySeeds.csv")
-        regularseason = pd.read_csv("data/WRegularSeasonCompactResults.csv")
-        tourneyseason = pd.read_csv("data/WNCAATourneyCompactResults.csv")
-    elif gender == "M":
-        seeds = pd.read_csv("data/MNCAATourneySeeds.csv")
-        mteams = pd.read_csv("data/MTeams.csv")
-        mcoaches = pd.read_csv("data/MTeamCoaches.csv")
-        regularseason = pd.read_csv("data/MRegularSeasonCompactResults.csv")
-        tourneyseason = pd.read_csv("data/MNCAATourneyCompactResults.csv")
-        mrankings = pd.read_csv("data/MMasseyOrdinals.csv")
-        mrankings = mrankings[mrankings.Season > 2015].reset_index(drop=True)
-        medianrankings = mrankings.groupby(["Season", "RankingDayNum", "TeamID"]).agg({"OrdinalRank": "median"}).reset_index()
-    else:
-        raise ValueError("You have to specify gender! Your options: W - women, M - men")
+    Args:
+        df1 (pd.DataFrame): input dataframe for augemention
+        df2 (pd.DataFrame): dataframe with regular and tourney phase compact results
 
-    # concat basic data for further improvement
-    data = pd.concat([regularseason, tourneyseason], axis=0)
-    data = data.loc[data.Season > 2015].reset_index(drop=True)
-    data['Win'] = 1
-
-
-    prep_wins = df.merge(
-        data,
+    Returns:
+        pd.DataFrame: enhanced dataframe
+    """
+    prep_wins = df1.merge(
+        df2,
         how="left",
         on=["Season", "WTeamID"],
     ).drop(["WLoc", "NumOT"], axis=1)
 
-    # add sum of wins (calculate every win till DayNum)
     wins = prep_wins[prep_wins["DayNum_x"] - prep_wins["DayNum_y"] > 0 ].reset_index(drop=True)
     wins = wins.groupby(["Season", "DayNum_x", "WTeamID", "LTeamID_x"]).agg({"Win" : "sum"}).reset_index().rename(columns={"DayNum_x" : "DayNum", "LTeamID_x" : "LTeamID",
-                                                                                                                    "Win" : "Wwin"})
+                                                                                                             "Win" : "Wwin"})
 
-    prep_wins = df.merge(
-        data,
+    prep_wins = df1.merge(
+        df2,
         how="left",
         on=["Season", "LTeamID"],
     ).drop(["WLoc", "NumOT"], axis=1)
@@ -105,8 +90,18 @@ def enrich_data(df: pd.DataFrame, gender: str):
     complete_wins = lwins.merge(
         wins,
         on=["Season", "DayNum", "WTeamID", "LTeamID"])
-    
-    #add mean score from all previous games in particular Season
+    return complete_wins
+
+def add_mean_score(data: pd.DataFrame, complete_wins: pd.DataFrame) -> pd.DataFrame:
+    """This function generates mean score from season data.
+
+    Args:
+        data (pd.DataFrame): dataframe with regular and tourney compact result
+        complete_wins (pd.DataFrame): data with wins informations
+
+    Returns:
+        pd.DataFrame: dataframe with mean scores in season
+    """
     onehalf_result = data[["Season", "DayNum", "WTeamID", "WScore"]].rename(columns={"WTeamID" : "TeamID", "WScore" : "Score"})
     secondhalf_result = data[["Season", "DayNum", "LTeamID", "LScore"]].rename(columns={"LTeamID" : "TeamID", "LScore" : "Score"})
     wfull_result = pd.concat([onehalf_result, secondhalf_result], axis=0).reset_index(drop=True)
@@ -130,32 +125,33 @@ def enrich_data(df: pd.DataFrame, gender: str):
     rscores = rscores[rscores.DayNum_x - rscores.DayNum_y > 0].reset_index(drop=True)
     rscores = rscores.groupby(["Season", "DayNum_x", "WTeamID", "LTeamID"]).agg({"Score" : "mean"}).reset_index().rename(columns={"DayNum_x" : "DayNum", 
                                                                                                                                 "Score" : "LScore"})
+    
     complete_scores = rscores.merge(
         lscores,
         how="left",
         on=["Season", "DayNum", "WTeamID", "LTeamID"]
     )
+
     complete_wins_scores = complete_scores.merge(
         complete_wins,
         how="left",
         on=["Season", "DayNum", "WTeamID", "LTeamID"]
     )
-    
-    df = df.merge(
-        complete_wins_scores,
-        how="left",
-        on=["Season", "DayNum", "WTeamID", "LTeamID"]
-    ).fillna(0)
+    return complete_wins_scores
 
-    seeds["ISeed"] = seeds.apply(transform_seeds, axis=1)
+def add_seed_data(df: pd.DataFrame, seeds: pd.DataFrame) -> pd.DataFrame:
+    """ Add seed values based on tournament values. 
 
+    Args:
+        df (pd.DataFrame): basic dataframe
+        seeds (pd.DataFrame): dataframe with seeds values
+
+    Returns:
+        pd.DataFrame: enhanced data
+    """
     seeds_prev = seeds.copy()
     seeds_prev["Season"] += 1
 
-    # information whether is tournament phase
-    df["is_tournament"] = df["DayNum"] >= 136
-
-    # add seed values based on tournament values
     regular_season = (
         df[~df["is_tournament"]]
         .merge(
@@ -193,87 +189,161 @@ def enrich_data(df: pd.DataFrame, gender: str):
     ).drop(["TeamID", "Seed"], axis=1)
     tournament = tournament.rename(columns={"ISeed": "SeedL"})
 
-    prep_enh = pd.concat([regular_season, tournament])
+    return pd.concat([regular_season, tournament])
+
+def add_encode_coaches_names(prep_enh: pd.DataFrame, mcoaches: pd.DataFrame) -> pd.DataFrame:
+    """ Assign coaches names to every team and encode it with label encoder.
+
+    Args:
+        prep_enh (pd.DataFrame): basic dataframe
+        mcoaches (pd.DataFrame): dataframe with coaches name
+
+    Returns:
+        pd.DataFrame: enhanced dataframe
+    """
+    prep_enh = prep_enh.merge(
+        mcoaches,
+        how="left",
+        left_on=["Season", "WTeamID"],
+        right_on=["Season", "TeamID"],
+    )
+    prep_enh = (
+        prep_enh.loc[
+            (prep_enh.DayNum >= prep_enh.FirstDayNum)
+            & (prep_enh.DayNum <= prep_enh.LastDayNum)
+        ]
+        .drop(["TeamID", "FirstDayNum", "LastDayNum"], axis=1)
+        .rename(columns={"CoachName": "WCoachName"})
+    )
+
+    prep_enh = prep_enh.merge(
+        mcoaches,
+        how="left",
+        left_on=["Season", "LTeamID"],
+        right_on=["Season", "TeamID"],
+    )
+    prep_enh = (
+        prep_enh.loc[
+            (prep_enh.DayNum >= prep_enh.FirstDayNum)
+            & (prep_enh.DayNum <= prep_enh.LastDayNum)
+        ]
+        .drop(["TeamID", "FirstDayNum", "LastDayNum"], axis=1)
+        .rename(columns={"CoachName": "LCoachName"})
+    )
+
+    label_enc = LabelEncoder()
+    prep_enh["WCoachName"] = label_enc.fit_transform(prep_enh[["WCoachName"]])
+    prep_enh["LCoachName"] = label_enc.transform(prep_enh[["LCoachName"]])
+
+    return prep_enh
+
+def calculate_duration(prep_enh: pd.DataFrame, mteams: pd.DataFrame) -> pd.DataFrame:
+    """Calucalte how long team is in the Division I.
+
+    Args:
+        prep_enh (pd.DataFrame): basic dataframe
+        mteams (pd.DataFrame): dataframe with teams informations
+
+    Returns:
+        pd.DataFrame: enhanced dataframe
+    """
+    prep_enh = (
+        prep_enh.merge(mteams, how="left", left_on="WTeamID", right_on="TeamID")
+        .drop(["TeamID", "TeamName"], axis=1)
+        .rename(columns={"Duration": "WDuration"})
+    )
+    prep_enh.loc[
+        prep_enh["Season"] - prep_enh["FirstD1Season"]
+        < prep_enh["LastD1Season"] - prep_enh["FirstD1Season"],
+        "Duration",
+    ] = (
+        prep_enh["Season"] - prep_enh["FirstD1Season"] + 1
+    )
+    prep_enh.loc[
+        prep_enh["Season"] - prep_enh["FirstD1Season"]
+        >= prep_enh["LastD1Season"] - prep_enh["FirstD1Season"],
+        "Duration",
+    ] = (
+        prep_enh["LastD1Season"] - prep_enh["FirstD1Season"] + 1
+    )
+    prep_enh = prep_enh.drop(["FirstD1Season", "LastD1Season"], axis=1)
+    return prep_enh
+
+def assing_rankings(prep_enh: pd.DataFrame, medianrankings: pd.DataFrame) -> pd.DataFrame:
+    """Assing median rankings to every team. Median is calculated across a lot of rankings.
+
+    Args:
+        prep_enh (pd.DataFrame): basic dataframe
+        medianrankings (pd.DataFrame): dataframe with calculated median rankings
+
+    Returns:
+        pd.DataFrame: enhanced dataframe
+    """
+    prep_enh_rank = prep_enh.merge(
+        medianrankings,
+        how="left",
+        left_on=["Season", "WTeamID"], 
+        right_on=["Season", "TeamID"]
+    )
+
+    prep_enh_rank = prep_enh_rank[prep_enh_rank.RankingDayNum - prep_enh_rank.DayNum <= 0].reset_index(drop=True)
+    prep_enh_rank = prep_enh_rank.groupby(["Season", "DayNum", "WTeamID", "LTeamID"]).agg(lambda x: x.iloc[-1]).reset_index()\
+        .drop(["RankingDayNum", "TeamID"], axis=1).rename(columns={"OrdinalRank": "RankW"})
+
+    prep_enh_rank = prep_enh_rank.merge(
+        medianrankings,
+        how="left",
+        left_on=["Season", "LTeamID"], 
+        right_on=["Season", "TeamID"]
+    )
+
+    prep_enh_rank = prep_enh_rank[prep_enh_rank.RankingDayNum - prep_enh_rank.DayNum <= 0].reset_index(drop=True)
+    prep_enh_rank = prep_enh_rank.groupby(["Season", "DayNum", "WTeamID", "LTeamID"]).agg(lambda x: x.iloc[-1]).reset_index()\
+        .drop(["RankingDayNum", "TeamID"], axis=1).rename(columns={"OrdinalRank": "RankL"})
+    return prep_enh_rank
+
+def enrich_data(df: pd.DataFrame, gender: str):
+    if gender == "W":
+        seeds = pd.read_csv("data/WNCAATourneySeeds.csv")
+        regularseason = pd.read_csv("data/WRegularSeasonCompactResults.csv")
+        tourneyseason = pd.read_csv("data/WNCAATourneyCompactResults.csv")
+    elif gender == "M":
+        seeds = pd.read_csv("data/MNCAATourneySeeds.csv")
+        mteams = pd.read_csv("data/MTeams.csv")
+        mcoaches = pd.read_csv("data/MTeamCoaches.csv")
+        regularseason = pd.read_csv("data/MRegularSeasonCompactResults.csv")
+        tourneyseason = pd.read_csv("data/MNCAATourneyCompactResults.csv")
+        mrankings = pd.read_csv("data/MMasseyOrdinals.csv")
+        mrankings = mrankings[mrankings.Season > 2015].reset_index(drop=True)
+        medianrankings = mrankings.groupby(["Season", "RankingDayNum", "TeamID"]).agg({"OrdinalRank": "median"}).reset_index()
+    else:
+        raise ValueError("You have to specify gender! Your options: W - women, M - men")
+
+    # concat basic data for further improvement
+    data = pd.concat([regularseason, tourneyseason], axis=0)
+    data = data.loc[data.Season > 2015].reset_index(drop=True)
+    data['Win'] = 1
+
+    complete_wins = add_number_of_wins(df, data)
+    complete_wins_scores = add_mean_score(data, complete_wins)
+
+    df = df.merge(
+        complete_wins_scores,
+        how="left",
+        on=["Season", "DayNum", "WTeamID", "LTeamID"]
+    ).fillna(0)
+
+    seeds["ISeed"] = seeds.apply(transform_seeds, axis=1)
+
+    # information whether is tournament phase
+    df["is_tournament"] = df["DayNum"] >= 136
+    prep_enh = add_seed_data(df, seeds)
 
     # add coaches names, encode it and calculate how long team is in Division I
     if gender == "M":
-        prep_enh = prep_enh.merge(
-            mcoaches,
-            how="left",
-            left_on=["Season", "WTeamID"],
-            right_on=["Season", "TeamID"],
-        )
-        prep_enh = (
-            prep_enh.loc[
-                (prep_enh.DayNum >= prep_enh.FirstDayNum)
-                & (prep_enh.DayNum <= prep_enh.LastDayNum)
-            ]
-            .drop(["TeamID", "FirstDayNum", "LastDayNum"], axis=1)
-            .rename(columns={"CoachName": "WCoachName"})
-        )
-
-        prep_enh = prep_enh.merge(
-            mcoaches,
-            how="left",
-            left_on=["Season", "LTeamID"],
-            right_on=["Season", "TeamID"],
-        )
-        prep_enh = (
-            prep_enh.loc[
-                (prep_enh.DayNum >= prep_enh.FirstDayNum)
-                & (prep_enh.DayNum <= prep_enh.LastDayNum)
-            ]
-            .drop(["TeamID", "FirstDayNum", "LastDayNum"], axis=1)
-            .rename(columns={"CoachName": "LCoachName"})
-        )
-
-        label_enc = LabelEncoder()
-        prep_enh["WCoachName"] = label_enc.fit_transform(prep_enh[["WCoachName"]])
-        prep_enh["LCoachName"] = label_enc.transform(prep_enh[["LCoachName"]])
-
-        prep_enh = (
-            prep_enh.merge(mteams, how="left", left_on="WTeamID", right_on="TeamID")
-            .drop(["TeamID", "TeamName"], axis=1)
-            .rename(columns={"Duration": "WDuration"})
-        )
-        prep_enh.loc[
-            prep_enh["Season"] - prep_enh["FirstD1Season"]
-            < prep_enh["LastD1Season"] - prep_enh["FirstD1Season"],
-            "Duration",
-        ] = (
-            prep_enh["Season"] - prep_enh["FirstD1Season"] + 1
-        )
-        prep_enh.loc[
-            prep_enh["Season"] - prep_enh["FirstD1Season"]
-            >= prep_enh["LastD1Season"] - prep_enh["FirstD1Season"],
-            "Duration",
-        ] = (
-            prep_enh["LastD1Season"] - prep_enh["FirstD1Season"] + 1
-        )
-        prep_enh = prep_enh.drop(["FirstD1Season", "LastD1Season"], axis=1)
-
-        prep_enh_rank = prep_enh.merge(
-            medianrankings,
-            how="left",
-            left_on=["Season", "WTeamID"], 
-            right_on=["Season", "TeamID"]
-        )
-
-        prep_enh_rank = prep_enh_rank[prep_enh_rank.RankingDayNum - prep_enh_rank.DayNum <= 0].reset_index(drop=True)
-        prep_enh_rank = prep_enh_rank.groupby(["Season", "DayNum", "WTeamID", "LTeamID"]).agg(lambda x: x.iloc[-1]).reset_index()\
-            .drop(["RankingDayNum", "TeamID"], axis=1).rename(columns={"OrdinalRank": "RankW"})
-
-        prep_enh_rank = prep_enh_rank.merge(
-            medianrankings,
-            how="left",
-            left_on=["Season", "LTeamID"], 
-            right_on=["Season", "TeamID"]
-        )
-
-        prep_enh_rank = prep_enh_rank[prep_enh_rank.RankingDayNum - prep_enh_rank.DayNum <= 0].reset_index(drop=True)
-        prep_enh_rank = prep_enh_rank.groupby(["Season", "DayNum", "WTeamID", "LTeamID"]).agg(lambda x: x.iloc[-1]).reset_index()\
-            .drop(["RankingDayNum", "TeamID"], axis=1).rename(columns={"OrdinalRank": "RankL"})
-        prep_enh = prep_enh_rank
+        prep_enh = add_encode_coaches_names(prep_enh, mcoaches)
+        prep_enh = calculate_duration(prep_enh, mteams)
+        prep_enh = assing_rankings(prep_enh, medianrankings)
 
     # change dtypes and calculate difference between seeds
     prep_enh["SeedW"] = prep_enh["SeedW"].fillna(16).astype(int)
