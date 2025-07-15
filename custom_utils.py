@@ -302,20 +302,70 @@ def assing_rankings(prep_enh: pd.DataFrame, medianrankings: pd.DataFrame) -> pd.
         .drop(["RankingDayNum", "TeamID"], axis=1).rename(columns={"OrdinalRank": "RankL"})
     return prep_enh_rank
 
+def add_avg_detailed_results(df: pd.DataFrame, detailed: pd.DataFrame) -> pd.DataFrame:
+    """The function's objective is to augment a basic dataframe with average metric from detailed season informations. Only informations 
+    from previous games will be added.
+
+    Args:
+        df (pd.DataFrame): initial dataframe for further augmentation
+        detailed (pd.DataFrame): dataframe with detailed summaries
+
+    Returns:
+        pd.DataFrame: result dataframe with added average detailed features
+    """
+    # define columns list, not all columns are necessery
+    lcolumns = ["Season", "DayNum"]
+    wcolumns = ["Season", "DayNum"]
+
+    # add columns specific for losing team and winning team
+    bool_columns = detailed.columns.str.startswith("L").tolist()
+    lcolumns.extend(detailed.columns[bool_columns])
+    bool_columns = detailed.columns.str.startswith("W").tolist()
+    wcolumns.extend(detailed.columns[bool_columns])
+
+    # define columns dict actual_name : new_name for further modification of the name
+    lmodcolumns = [column if column[0] != 'L' else column[1:] for column in lcolumns]
+    ldict_columns = { col1 : col2 for col1, col2 in zip(lcolumns, lmodcolumns)}
+    wmodcolumns = [column if column[0] != 'W' else column[1:] for column in wcolumns]
+    wdict_columns = { col1 : col2 for col1, col2 in zip(wcolumns, wmodcolumns)}
+
+    # split dataframe on columns, amend column names and concatanate them together
+    lmdetailed = detailed[lcolumns].rename(columns=ldict_columns)
+    wmdetailed = detailed[wcolumns].rename(columns=wdict_columns).drop("Loc", axis=1)
+    flattendetailed = pd.concat([lmdetailed, wmdetailed]).drop("Score", axis=1).reset_index(drop=True)
+
+    # merge, filter and calculate average score of each metric
+    avg_dict = { value : "mean" for i, value in enumerate(ldict_columns.values()) if i > 3}
+    invwdict = { col2 : col1 for col1, col2 in zip(wcolumns, wmodcolumns)}
+    invldict = { col2 : col1 for col1, col2 in zip(lcolumns, lmodcolumns)}
+    wdf = df.merge(flattendetailed, left_on=["Season", "WTeamID"], right_on=["Season", "TeamID"])
+    wdf = wdf[wdf.DayNum_x - wdf.DayNum_y > 0].reset_index(drop=True)
+    wdf = wdf.groupby(["Season", "DayNum_x", "WTeamID", "LTeamID"]).agg(avg_dict).reset_index().rename(columns={"DayNum_x" : "DayNum"}).rename(columns=invwdict)
+    ldf = df.merge(flattendetailed, left_on=["Season", "LTeamID"], right_on=["Season", "TeamID"])
+    ldf = ldf[ldf.DayNum_x - ldf.DayNum_y > 0].reset_index(drop=True)
+    ldf = ldf.groupby(["Season", "DayNum_x", "WTeamID", "LTeamID"]).agg(avg_dict).reset_index().rename(columns={"DayNum_x" : "DayNum"}).rename(columns=invldict)
+    wlmprep = wdf.merge(ldf, how="left", on=["Season", "DayNum", "WTeamID", "LTeamID"])
+
+    return df.merge(wlmprep, how="left", on=["Season", "DayNum", "WTeamID", "LTeamID"]).fillna(0).sort_values(by=["Season", "DayNum"]).reset_index(drop=True)
+
 def enrich_data(df: pd.DataFrame, gender: str):
     if gender == "W":
         seeds = pd.read_csv("data/WNCAATourneySeeds.csv")
         regularseason = pd.read_csv("data/WRegularSeasonCompactResults.csv")
         tourneyseason = pd.read_csv("data/WNCAATourneyCompactResults.csv")
+        detailedregularseason = pd.read_csv("data/WRegularSeasonDetailedResults.csv")
+        detailedtourneyseason = pd.read_csv("data/WNCAATourneyDetailedResults.csv")
     elif gender == "M":
         seeds = pd.read_csv("data/MNCAATourneySeeds.csv")
         mteams = pd.read_csv("data/MTeams.csv")
         mcoaches = pd.read_csv("data/MTeamCoaches.csv")
         regularseason = pd.read_csv("data/MRegularSeasonCompactResults.csv")
         tourneyseason = pd.read_csv("data/MNCAATourneyCompactResults.csv")
-        mrankings = pd.read_csv("data/MMasseyOrdinals.csv")
-        mrankings = mrankings[mrankings.Season > 2015].reset_index(drop=True)
-        medianrankings = mrankings.groupby(["Season", "RankingDayNum", "TeamID"]).agg({"OrdinalRank": "median"}).reset_index()
+        rankings = pd.read_csv("data/MMasseyOrdinals.csv")
+        rankings = rankings[rankings.Season > 2015].reset_index(drop=True)
+        detailedregularseason = pd.read_csv("data/MRegularSeasonDetailedResults.csv")
+        detailedtourneyseason = pd.read_csv("data/MNCAATourneyDetailedResults.csv")
+        medianrankings = rankings.groupby(["Season", "RankingDayNum", "TeamID"]).agg({"OrdinalRank": "median"}).reset_index()
     else:
         raise ValueError("You have to specify gender! Your options: W - women, M - men")
 
@@ -352,6 +402,10 @@ def enrich_data(df: pd.DataFrame, gender: str):
 
     prep_enh["SeedDiff"] = prep_enh["SeedW"] - prep_enh["SeedL"]
 
+    # add average metrics
+    detailed = pd.concat([detailedregularseason, detailedtourneyseason]).sort_values(["Season", "DayNum"]).reset_index(drop=True)
+    prep_enh = add_avg_detailed_results(prep_enh, detailed)
+
     return prep_enh.reset_index(drop=True)
 
 
@@ -372,7 +426,7 @@ def feature_importance(clf, data: pd.DataFrame) -> pd.DataFrame:
             "Importance_clf": importance_clf,
             "Importance_mi": importance_mi,
         }
-    )
+    ).sort_values(["Importance_clf", "Importance_mi"])
 
     return importance_df.style.apply(
         highlight_top_n, subset=["Importance_clf", "Importance_mi"]
