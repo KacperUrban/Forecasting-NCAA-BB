@@ -426,7 +426,7 @@ def feature_importance(clf, data: pd.DataFrame) -> pd.DataFrame:
             "Importance_clf": importance_clf,
             "Importance_mi": importance_mi,
         }
-    ).sort_values(["Importance_clf", "Importance_mi"])
+    ).sort_values(["Importance_clf", "Importance_mi"], ascending=False).reset_index(drop=True)
 
     return importance_df.style.apply(
         highlight_top_n, subset=["Importance_clf", "Importance_mi"]
